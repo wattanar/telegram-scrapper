@@ -322,15 +322,18 @@ async def _login() -> int:
 
 async def _chats(args: argparse.Namespace, factory: SourceFactory) -> int:
     console = Console(stderr=True)
-    source = factory(DEFAULT_RETRY)
+    source: TelegramSource | None = None
     try:
+        # Inside the try: missing credentials surface here, not as a traceback.
+        source = factory(DEFAULT_RETRY)
         rows = await source.list_chats(args.search)
     except NotAuthorized as exc:
         return _report_not_logged_in(console, exc)
     except KeyboardInterrupt:
         return EXIT_INTERRUPTED
     finally:
-        await source.close()
+        if source is not None:
+            await source.close()
     _print_chats(Console(), rows)
     return EXIT_OK
 

@@ -156,3 +156,34 @@ def test_fetch_json_summary_reports_states_and_exit_code(tmp_path: Path, capsys)
     assert summary["total_bytes"] == 2
     failed = next(item for item in summary["items"] if item["state"] == "failed")
     assert "disk full" in failed["error"]
+
+
+def raising_factory(error: Exception):
+    def build(retry: int):
+        raise error
+
+    return build
+
+
+def test_chats_without_credentials_reports_not_logged_in_instead_of_raising(capsys) -> None:
+    code = main(
+        ["chats"],
+        source_factory=raising_factory(NotAuthorized("no api_id/api_hash configured")),
+    )
+
+    captured = capsys.readouterr()
+    assert code == 3
+    assert "no api_id/api_hash configured" in captured.err
+    assert "tgmedia login" in captured.err
+
+
+def test_chats_lists_dialogs(capsys) -> None:
+    source = FakeSource((fake_item(),))
+
+    code = main(["chats"], source_factory=factory(source))
+
+    assert code == 0
+    assert source.closed is True
+    printed = capsys.readouterr().out
+    assert "Demo Group" in printed
+    assert "demo" in printed
