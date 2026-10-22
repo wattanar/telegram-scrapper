@@ -1,4 +1,4 @@
-"""The JSON ledger of what has already been captured, saved atomically after every write."""
+"""The JSON ledger of what has already been captured, saved atomically in batches."""
 
 from __future__ import annotations
 
@@ -14,6 +14,9 @@ log = logging.getLogger(__name__)
 
 LEDGER_VERSION = 1
 LEDGER_RELPATH = Path(".tgmedia") / "ledger.json"
+# Rewriting the whole file per item is quadratic at group scale; batching caps the
+# loss from a hard kill at BATCH - 1 records, each a cheap re-download.
+BATCH = 20
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,12 +53,13 @@ def unique_key(chat_id: int, unique_id: str) -> str:
 
 
 class Ledger:
-    """One writer, the orchestrator; every mutation is followed by an atomic save."""
+    """One writer, the orchestrator; saves every `BATCH` records and on `flush`."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
         self._items: dict[str, LedgerEntry] = {}
         self._unique: dict[str, str] = {}
+        self._dirty = 0
 
     @classmethod
     def load(cls, path: Path) -> Ledger:
@@ -91,7 +95,14 @@ class Ledger:
         self._items[item_key(item.chat_id, item.message_id)] = LedgerEntry(str(path), size, item.unique_id)
         if item.unique_id:
             self._unique[unique_key(item.chat_id, item.unique_id)] = str(path)
-        self.save()
+        self._dirty += 1
+        if self._dirty >= BATCH:
+            self.save()
+
+    def flush(self) -> None:
+        """Save pending records; a no-op when nothing changed, so callers can repeat it."""
+        if self._dirty:
+            self.save()
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -103,3 +114,4 @@ class Ledger:
         tmp = self.path.with_name(f"{self.path.name}.tmp")
         tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
         os.replace(tmp, self.path)
+        self._dirty = 0

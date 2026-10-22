@@ -20,7 +20,7 @@ from telethon.tl.custom.message import Message
 from telethon.tl.types import Channel, MessageReplyHeader, User
 
 from .domain import KINDS, ChatSummary, MediaItem, MediaKind, ResolvedChat, Selection, part_path
-from .ports import AmbiguousChat, ChatNotFound, NotAuthorized
+from .ports import AmbiguousChat, ChatNotFound, MediaGone, NotAuthorized
 
 log = logging.getLogger(__name__)
 
@@ -142,6 +142,7 @@ class TelethonSource:
         self._client = TelegramClient(StringSession(session), api_id, api_hash, connection_retries=5)
         self._retry = max(retry, 0)
         self._entities: dict[str, object] = {}
+        self._by_id: dict[int, object] = {}
 
     async def close(self) -> None:
         await self._client.disconnect()
@@ -175,6 +176,7 @@ class TelethonSource:
                 raise AmbiguousChat(query, [_summary(entity) for entity in matches])
             entity = matches[0]
         self._entities[key] = entity
+        self._by_id[utils.get_peer_id(entity)] = entity
         return entity
 
     async def resolve_chat(self, query: str) -> ResolvedChat:
@@ -197,7 +199,6 @@ class TelethonSource:
         chat_id = utils.get_peer_id(entity)
         async for message in client.iter_messages(
             entity,
-            limit=selection.limit,
             offset_date=selection.until,
             reverse=False,
             wait_time=1,
@@ -214,11 +215,18 @@ class TelethonSource:
     ) -> Path:
         dest.parent.mkdir(parents=True, exist_ok=True)
         part = part_path(dest)
+        entity = self._by_id.get(item.chat_id)
+        if entity is None:
+            entity = await self._client.get_entity(item.chat_id)
+            self._by_id[item.chat_id] = entity
+        message = await self._client.get_messages(entity, ids=item.download_ref)
+        if message is None or detect_kind(message) is None:
+            raise MediaGone(f"message {item.message_id} is no longer available")
         attempts = 0
         while True:
             try:
                 await self._client.download_media(
-                    item.download_ref,
+                    message,
                     file=str(part),
                     progress_callback=_Throttle(on_progress),
                 )
@@ -230,6 +238,7 @@ class TelethonSource:
             except (OSError, RPCError, TimeoutError) as exc:
                 attempts += 1
                 if attempts > self._retry:
+                    part.unlink(missing_ok=True)
                     raise
                 log.warning(
                     "retry %d/%d for message %s after %s", attempts, self._retry, item.message_id, exc
@@ -259,7 +268,7 @@ def _to_item(message: Message, selection: Selection, chat_id: int) -> MediaItem 
         date=date,
         file_name=file.name if file is not None else None,
         unique_id=_unique_id(message),
-        download_ref=message,
+        download_ref=message.id,
     )
 
 

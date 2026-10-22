@@ -65,7 +65,7 @@ Exit codes: `0` everything requested is on disk, `1` at least one item failed, `
 
 ## Idempotency
 
-Running `fetch` twice downloads nothing the second time. Every finished item is written to `downloads/.tgmedia/ledger.json` before it counts as done, and an item already in the ledger is skipped without touching the network.
+Running `fetch` twice downloads nothing the second time. The ledger at `downloads/.tgmedia/ledger.json` is saved in batches of 20 finished items and flushed when the run ends, so a normal exit, a failed item, or Ctrl-C keeps every completed record. A hard kill can lose the last 19 records, which costs a re-download of at most 19 items. An item already in the ledger is skipped without touching the network.
 
 A crash mid-file leaves only `<dest>.part`. That item is not in the ledger, so the next run fetches it again and the partial file is overwritten.
 

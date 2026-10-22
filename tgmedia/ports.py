@@ -30,6 +30,10 @@ class NotAuthorized(RuntimeError):
     """The saved session is missing, expired, or revoked."""
 
 
+class MediaGone(RuntimeError):
+    """The message was deleted, or it no longer carries downloadable media."""
+
+
 class TelegramSource(Protocol):
     async def close(self) -> None: ...
 

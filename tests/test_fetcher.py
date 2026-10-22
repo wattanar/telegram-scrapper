@@ -87,6 +87,22 @@ async def test_one_failure_does_not_stop_the_others(tmp_path: Path) -> None:
     assert (root / "demo" / "photos" / "2024-05-01_3.jpg").read_bytes() == b"three"
 
 
+async def test_a_failed_item_still_leaves_the_three_done_items_in_the_disk_ledger(tmp_path: Path) -> None:
+    root = tmp_path / "downloads"
+    source = FakeSource(
+        tuple(fake_item(message_id=message_id, data=b"x") for message_id in range(1, 5)),
+        failures={2: RuntimeError("telegram said no")},
+    )
+
+    await fetch(source, root)
+
+    ledger = open_ledger(root)
+    assert ledger.get(DEMO_CHAT.chat_id, 1) is not None
+    assert ledger.get(DEMO_CHAT.chat_id, 2) is None
+    assert ledger.get(DEMO_CHAT.chat_id, 3) is not None
+    assert ledger.get(DEMO_CHAT.chat_id, 4) is not None
+
+
 async def test_failed_item_is_retried_on_the_next_run(tmp_path: Path) -> None:
     root = tmp_path / "downloads"
     item = fake_item(message_id=1, data=b"one")

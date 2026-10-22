@@ -367,6 +367,7 @@ async def _fetch(args: argparse.Namespace, factory: SourceFactory) -> int:
     except NotAuthorized as exc:
         return _report_not_logged_in(errors, exc)
     finally:
+        ledger.flush()
         if isinstance(sink, RichSink):
             sink.stop()
         if source is not None:

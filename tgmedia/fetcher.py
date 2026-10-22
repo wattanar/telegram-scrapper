@@ -121,9 +121,12 @@ async def run(
             completed.append(result)
             progress.item_finished(result)
 
-    async with asyncio.TaskGroup() as group:
-        for item in prepared.items:
-            group.create_task(capture(item))
+    try:
+        async with asyncio.TaskGroup() as group:
+            for item in prepared.items:
+                group.create_task(capture(item))
+    finally:
+        ledger.flush()
 
     results.extend(completed)
     return RunSummary(
