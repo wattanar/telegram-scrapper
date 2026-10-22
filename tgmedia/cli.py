@@ -294,24 +294,27 @@ def default_source_factory(retry: int) -> TelegramSource:
 
 async def _login() -> int:
     console = Console(stderr=True)
-    credentials = config.read_credentials()
-    if credentials is None:
-        raw_id = input("api_id: ").strip()
-        raw_hash = input("api_hash: ").strip()
-        if not raw_hash:
-            console.print("[red]api_hash is required[/red]")
-            return EXIT_USAGE
-        try:
-            credentials = config.Credentials(api_id=int(raw_id), api_hash=raw_hash)
-        except ValueError:
-            console.print("[red]api_id must be a number[/red]")
-            return EXIT_USAGE
-        if input(f"write these to {config.config_path()}? [y/N] ").strip().lower() in ("y", "yes"):
-            console.print(f"wrote {config.write_credentials(credentials)}")
+    try:
+        credentials = config.read_credentials()
+        if credentials is None:
+            raw_id = input("api_id: ").strip()
+            raw_hash = input("api_hash: ").strip()
+            if not raw_hash:
+                console.print("[red]api_hash is required[/red]")
+                return EXIT_USAGE
+            try:
+                credentials = config.Credentials(api_id=int(raw_id), api_hash=raw_hash)
+            except ValueError:
+                console.print("[red]api_id must be a number[/red]")
+                return EXIT_USAGE
+            if input(f"write these to {config.config_path()}? [y/N] ").strip().lower() in ("y", "yes"):
+                console.print(f"wrote {config.write_credentials(credentials)}")
 
-    from .telegram import interactive_login
+        from .telegram import interactive_login
 
-    result = await interactive_login(credentials.api_id, credentials.api_hash)
+        result = await interactive_login(credentials.api_id, credentials.api_hash)
+    except KeyboardInterrupt:
+        return EXIT_INTERRUPTED
     config.write_session(result.session)
     console.print(f"logged in as [bold]{result.name}[/bold]; session saved to {config.session_path()}")
     return EXIT_OK
@@ -324,6 +327,8 @@ async def _chats(args: argparse.Namespace, factory: SourceFactory) -> int:
         rows = await source.list_chats(args.search)
     except NotAuthorized as exc:
         return _report_not_logged_in(console, exc)
+    except KeyboardInterrupt:
+        return EXIT_INTERRUPTED
     finally:
         await source.close()
     _print_chats(Console(), rows)
@@ -366,6 +371,8 @@ async def _fetch(args: argparse.Namespace, factory: SourceFactory) -> int:
         return EXIT_USAGE
     except NotAuthorized as exc:
         return _report_not_logged_in(errors, exc)
+    except KeyboardInterrupt:
+        return EXIT_INTERRUPTED
     finally:
         ledger.flush()
         if isinstance(sink, RichSink):

@@ -1,31 +1,20 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from fakes import FakeSource, fake_item
 from tgmedia.cli import main
-from tgmedia.domain import MediaItem
 from tgmedia.ports import NotAuthorized
 
 
 def factory(source: FakeSource):
     return lambda retry: source
-
-
-class InterruptingSource(FakeSource):
-    async def download(
-        self,
-        item: MediaItem,
-        dest: Path,
-        on_progress: Callable[[int, int | None], None],
-    ) -> Path:
-        if item.message_id == 2:
-            raise KeyboardInterrupt
-        return await super().download(item, dest, on_progress)
 
 
 def test_fetch_dry_run_json_reports_the_plan_and_downloads_nothing(tmp_path: Path, capsys) -> None:
@@ -130,19 +119,23 @@ def test_fetch_end_to_end_writes_files_with_expected_names_and_bytes(tmp_path: P
 
 def test_interrupt_exits_130_and_keeps_completed_items_on_disk(tmp_path: Path) -> None:
     root = tmp_path / "downloads"
-    source = InterruptingSource(
-        (fake_item(message_id=1, data=b"first"), fake_item(message_id=2, data=b"second")),
+    child = Path(__file__).parent / "interrupt_child.py"
+
+    finished = subprocess.run(
+        [sys.executable, str(child), str(root)],
+        cwd=Path(__file__).parent.parent,
+        env={**os.environ, "PYTHONPATH": str(child.parent)},
+        capture_output=True,
+        text=True,
     )
 
-    code = main(
-        ["fetch", "@demo", "--out", str(root), "--concurrency", "1"], source_factory=factory(source)
-    )
-
-    assert code == 130
+    assert finished.returncode == 130
     first = root / "demo" / "photos" / "2024-05-01_1.jpg"
     assert first.read_bytes() == b"first"
     raw = json.loads((root / ".tgmedia" / "ledger.json").read_text())
     assert raw["items"] == {"-1001234567890:1": {"path": str(first), "size": 5, "unique": None}}
+    assert "Task exception was never retrieved" not in finished.stderr
+    assert "Traceback" not in finished.stderr
 
 
 def test_fetch_json_summary_reports_states_and_exit_code(tmp_path: Path, capsys) -> None:
