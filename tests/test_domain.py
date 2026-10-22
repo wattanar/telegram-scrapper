@@ -7,9 +7,11 @@ import pytest
 
 from tgmedia.domain import (
     KINDS,
+    LinkError,
     MediaItem,
     MediaKind,
     MediaKindError,
+    MessageRef,
     Selection,
     chat_slug,
     destination,
@@ -133,7 +135,7 @@ def test_part_path_is_a_sibling_of_the_final_file() -> None:
 
 
 @pytest.mark.parametrize(
-    ("text", "target", "message_id"),
+    ("text", "target", "ref"),
     [
         ("@demo", "@demo", None),
         ("  @demo  ", "@demo", None),
@@ -142,21 +144,44 @@ def test_part_path_is_a_sibling_of_the_final_file() -> None:
         ("t.me/demo", "@demo", None),
         ("https://t.me/demo", "@demo", None),
         ("t.me/s/demo", "@demo", None),
-        ("t.me/demo/12", "@demo", 12),
-        ("https://t.me/demo/12", "@demo", 12),
-        ("t.me/c/1234/56", -1001234, 56),
-        ("https://t.me/c/1234/56", -1001234, 56),
+        ("t.me/demo/12", "@demo", MessageRef(12)),
+        ("https://t.me/demo/12", "@demo", MessageRef(12)),
+        ("t.me/demo/795?comment=11953", "@demo", MessageRef(795, 11953)),
+        ("https://t.me/demo/795?single&comment=11953", "@demo", MessageRef(795, 11953)),
+        ("t.me/s/demo/795?comment=11953", "@demo", MessageRef(795, 11953)),
+        ("t.me/c/1234/56", -1001234, MessageRef(56)),
+        ("https://t.me/c/1234/56", -1001234, MessageRef(56)),
+        ("t.me/c/1234/795?comment=11953", -1001234, MessageRef(795, 11953)),
         ("-1001234567890", -1001234567890, None),
         ("", None, None),
     ],
 )
 def test_parse_chat_query_covers_every_accepted_form(
-    text: str, target: str | int | None, message_id: int | None
+    text: str, target: str | int | None, ref: MessageRef | None
 ) -> None:
     query = parse_chat_query(text)
 
     assert query.target == target
-    assert query.message_id == message_id
+    assert query.ref == ref
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "t.me/demo?comment=5",
+        "t.me/demo/795?comment=abc",
+        "t.me/demo/795?comment=0",
+        "t.me/demo/795?comment=",
+    ],
+)
+def test_parse_chat_query_rejects_a_comment_link_it_cannot_use(text: str) -> None:
+    with pytest.raises(LinkError):
+        parse_chat_query(text)
+
+
+def test_message_ref_label_names_the_comment_and_its_post() -> None:
+    assert MessageRef(795).label == "message 795"
+    assert MessageRef(795, 11953).label == "comment 11953 on message 795"
 
 
 @pytest.mark.parametrize(

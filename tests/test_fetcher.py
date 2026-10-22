@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from fakes import DEMO_CHAT, FakeSource, fake_item
-from tgmedia.domain import ItemState, MediaKind, Selection, destination, part_path
+from fakes import DEMO_CHAT, DISCUSSION_CHAT, FakeSource, fake_item
+from tgmedia.domain import ItemState, MediaKind, MessageRef, Selection, destination, part_path
 from tgmedia.fetcher import plan, plan_message, run
 from tgmedia.ledger import Ledger
 from tgmedia.ports import MessageWithoutMedia
@@ -214,13 +214,13 @@ async def test_plan_message_returns_only_the_named_message(tmp_path: Path) -> No
     root = tmp_path / "downloads"
     source = FakeSource((fake_item(message_id=1, data=b"one"), fake_item(message_id=2, data=b"named")))
 
-    prepared = await plan_message(source, "@demo", 2, Selection(), root, open_ledger(root))
+    prepared = await plan_message(source, "@demo", MessageRef(2), Selection(), root, open_ledger(root))
 
     assert [item.message_id for item in prepared.items] == [2]
     assert prepared.skipped == ()
     assert prepared.counts == {MediaKind.from_name("photo"): 1}
     assert prepared.total_bytes == len(b"named")
-    assert source.get_calls == [2]
+    assert source.get_calls == [MessageRef(2)]
 
 
 async def test_plan_message_skips_a_message_the_ledger_already_holds(tmp_path: Path) -> None:
@@ -229,13 +229,65 @@ async def test_plan_message_skips_a_message_the_ledger_already_holds(tmp_path: P
     source = FakeSource((fake_item(message_id=2, data=b"named"),))
     ledger = open_ledger(root)
 
-    prepared = await plan_message(source, "@demo", 2, Selection(), root, ledger)
+    prepared = await plan_message(source, "@demo", MessageRef(2), Selection(), root, ledger)
     summary = await run(source, prepared, ledger)
 
     assert prepared.items == ()
     assert [item.message_id for item in prepared.skipped] == [2]
     assert states(summary) == {2: ItemState.SKIPPED}
     assert source.download_calls == []
+
+
+async def test_plan_message_plans_the_comment_and_keeps_the_named_chat(tmp_path: Path) -> None:
+    root = tmp_path / "downloads"
+    comment = fake_item(
+        message_id=11953, data=b"comment", kind="video", chat_id=DISCUSSION_CHAT.chat_id
+    )
+    source = FakeSource((comment,))
+
+    prepared = await plan_message(
+        source, "@demo", MessageRef(795, 11953), Selection(), root, open_ledger(root)
+    )
+
+    assert prepared.chat == DEMO_CHAT
+    assert [item.message_id for item in prepared.items] == [11953]
+    assert prepared.items[0].chat_id == DISCUSSION_CHAT.chat_id
+    assert source.get_calls == [MessageRef(795, 11953)]
+
+
+async def test_plan_message_skips_a_comment_the_ledger_already_holds(tmp_path: Path) -> None:
+    root = tmp_path / "downloads"
+    comment = fake_item(
+        message_id=11953, data=b"comment", kind="video", chat_id=DISCUSSION_CHAT.chat_id
+    )
+    ledger = open_ledger(root)
+    ledger.record(comment, root / "demo" / "videos" / "2024-05-01_11953.mp4", len(b"comment"))
+    source = FakeSource((comment,))
+
+    prepared = await plan_message(source, "@demo", MessageRef(795, 11953), Selection(), root, ledger)
+    summary = await run(source, prepared, ledger)
+
+    assert prepared.items == ()
+    assert [item.message_id for item in prepared.skipped] == [11953]
+    assert states(summary) == {11953: ItemState.SKIPPED}
+    assert source.download_calls == []
+
+
+async def test_plan_message_names_the_comment_a_filter_rejected(tmp_path: Path) -> None:
+    comment = fake_item(message_id=11953, kind="video", chat_id=DISCUSSION_CHAT.chat_id)
+    photos_only = Selection(kinds=frozenset({MediaKind.from_name("photo")}))
+
+    with pytest.raises(
+        MessageWithoutMedia, match="comment 11953 on message 795 is a video, and --kind asked for photo"
+    ):
+        await plan_message(
+            FakeSource((comment,)),
+            "@demo",
+            MessageRef(795, 11953),
+            photos_only,
+            tmp_path / "downloads",
+            open_ledger(tmp_path),
+        )
 
 
 @pytest.mark.parametrize(
@@ -254,4 +306,6 @@ async def test_plan_message_names_the_filter_that_rejected_the_message(
     source = FakeSource((fake_item(message_id=2, data=b"named"),))
 
     with pytest.raises(MessageWithoutMedia, match=rf"message 2 .*{filter_name}"):
-        await plan_message(source, "@demo", 2, selection, tmp_path / "downloads", open_ledger(tmp_path))
+        await plan_message(
+            source, "@demo", MessageRef(2), selection, tmp_path / "downloads", open_ledger(tmp_path)
+        )
