@@ -13,6 +13,7 @@ from tgmedia.domain import (
     Selection,
     chat_slug,
     destination,
+    parse_chat_query,
     part_path,
 )
 
@@ -129,3 +130,38 @@ def test_chat_slug_prefers_username_then_title() -> None:
 
 def test_part_path_is_a_sibling_of_the_final_file() -> None:
     assert part_path(Path("/root/photos/2024-05-01_7.jpg")) == Path("/root/photos/2024-05-01_7.jpg.part")
+
+
+@pytest.mark.parametrize(
+    ("text", "target", "message_id"),
+    [
+        ("@demo", "@demo", None),
+        ("  @demo  ", "@demo", None),
+        ("demo", None, None),
+        ("Demo Group", None, None),
+        ("t.me/demo", "@demo", None),
+        ("https://t.me/demo", "@demo", None),
+        ("t.me/s/demo", "@demo", None),
+        ("t.me/demo/12", "@demo", 12),
+        ("https://t.me/demo/12", "@demo", 12),
+        ("t.me/c/1234/56", -1001234, 56),
+        ("https://t.me/c/1234/56", -1001234, 56),
+        ("-1001234567890", -1001234567890, None),
+        ("", None, None),
+    ],
+)
+def test_parse_chat_query_covers_every_accepted_form(
+    text: str, target: str | int | None, message_id: int | None
+) -> None:
+    query = parse_chat_query(text)
+
+    assert query.target == target
+    assert query.message_id == message_id
+
+
+@pytest.mark.parametrize(
+    "text", ["https://t.me/+abcdef", "t.me/joinchat/abcdef", "t.me/addstickers/pack"]
+)
+def test_parse_chat_query_rejects_invite_links(text: str) -> None:
+    with pytest.raises(ValueError, match="invite links are not supported"):
+        parse_chat_query(text)

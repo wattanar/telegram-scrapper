@@ -5,13 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import timezone
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from telethon import TelegramClient, utils
 from telethon.errors import FloodWaitError, RPCError
@@ -19,15 +17,21 @@ from telethon.sessions import StringSession
 from telethon.tl.custom.message import Message
 from telethon.tl.types import Channel, MessageReplyHeader, User
 
-from .domain import KINDS, ChatSummary, MediaItem, MediaKind, ResolvedChat, Selection, part_path
+from .domain import (
+    KINDS,
+    ChatSummary,
+    MediaItem,
+    MediaKind,
+    ResolvedChat,
+    Selection,
+    parse_chat_query,
+    part_path,
+)
 from .ports import AmbiguousChat, ChatNotFound, MediaGone, NotAuthorized
 
 log = logging.getLogger(__name__)
 
 _PROGRESS_INTERVAL = 0.25
-_LINK_HOSTS = ("t.me", "www.t.me", "telegram.me", "telegram.dog")
-_INVITE_SEGMENTS = ("joinchat", "addstickers", "share")
-_NUMERIC = re.compile(r"-?\d+")
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,44 +103,6 @@ def _summary(entity: object) -> ChatSummary:
     )
 
 
-def _link_parts(text: str) -> list[str] | None:
-    lowered = text.lower()
-    for scheme in ("http://", "https://"):
-        if lowered.startswith(scheme):
-            split = urlsplit(text)
-            break
-    else:
-        split = urlsplit(f"https://{text}")
-    if split.netloc.lower() not in _LINK_HOSTS:
-        return None
-    return [part for part in split.path.split("/") if part]
-
-
-def _direct_target(query: str) -> str | int | None:
-    """Map a username, numeric id, or t.me link to something `get_entity` accepts."""
-    text = query.strip()
-    if not text:
-        return None
-    if text.startswith("@"):
-        return text
-    parts = _link_parts(text)
-    if parts is not None:
-        if parts and parts[0] == "s" and len(parts) > 1:
-            parts = parts[1:]
-        if not parts:
-            return None
-        if parts[0] == "c" and len(parts) > 1 and parts[1].isdigit():
-            return int(f"-100{parts[1]}")
-        if parts[0].startswith("+") or parts[0] in _INVITE_SEGMENTS:
-            raise ChatNotFound(
-                f"{query}: invite links are not supported; use @username, a t.me/<name> link, or an id"
-            )
-        return f"@{parts[0]}"
-    if _NUMERIC.fullmatch(text):
-        return int(text)
-    return None
-
-
 class TelethonSource:
     def __init__(self, api_id: int, api_hash: str, session: str = "", *, retry: int = 3) -> None:
         self._client = TelegramClient(StringSession(session), api_id, api_hash, connection_retries=5)
@@ -161,7 +127,10 @@ class TelethonSource:
         cached = self._entities.get(key)
         if cached is not None:
             return cached
-        target = _direct_target(key)
+        try:
+            target = parse_chat_query(key).target
+        except ValueError as exc:
+            raise ChatNotFound(f"{query}: {exc}") from None
         if target is not None:
             try:
                 entity = await client.get_entity(target)

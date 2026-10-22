@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 class MediaKindError(ValueError):
@@ -88,6 +89,57 @@ class Selection:
             if self.max_size is not None and item.size > self.max_size:
                 return False
         return True
+
+
+_LINK_HOSTS = ("t.me", "www.t.me", "telegram.me", "telegram.dog")
+_INVITE_SEGMENTS = ("joinchat", "addstickers", "share")
+_NUMERIC = re.compile(r"-?\d+")
+
+
+@dataclass(frozen=True, slots=True)
+class ChatQuery:
+    """One parsed chat argument: what to resolve, plus the message id when it names one."""
+
+    target: str | int | None
+    message_id: int | None = None
+
+
+def _link_parts(text: str) -> list[str] | None:
+    lowered = text.lower()
+    for scheme in ("http://", "https://"):
+        if lowered.startswith(scheme):
+            split = urlsplit(text)
+            break
+    else:
+        split = urlsplit(f"https://{text}")
+    if split.netloc.lower() not in _LINK_HOSTS:
+        return None
+    return [part for part in split.path.split("/") if part]
+
+
+def parse_chat_query(text: str) -> ChatQuery:
+    """Map `@name`, `name`, a t.me link, a numeric id, or a title to one typed query."""
+    stripped = text.strip()
+    if not stripped:
+        return ChatQuery(None)
+    if stripped.startswith("@"):
+        return ChatQuery(stripped)
+    parts = _link_parts(stripped)
+    if parts is None:
+        return ChatQuery(int(stripped) if _NUMERIC.fullmatch(stripped) else None)
+    if parts and parts[0] == "s" and len(parts) > 1:
+        parts = parts[1:]
+    if not parts:
+        return ChatQuery(None)
+    if parts[0] == "c" and len(parts) > 1 and parts[1].isdigit():
+        message_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+        return ChatQuery(int(f"-100{parts[1]}"), message_id)
+    if parts[0].startswith("+") or parts[0] in _INVITE_SEGMENTS:
+        raise ValueError(
+            "invite links are not supported; use @username, a t.me/<name> link, or an id"
+        )
+    message_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+    return ChatQuery(f"@{parts[0]}", message_id)
 
 
 class ItemState(StrEnum):
