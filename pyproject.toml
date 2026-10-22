@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "tgmedia"
 version = "0.1.0"
 description = "Download media from a Telegram group or channel with a user account"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "telethon>=1.36",
@@ -27,4 +28,3 @@ packages = ["tgmedia"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-q"

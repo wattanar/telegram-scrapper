@@ -1,0 +1,134 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from fakes import FakeSource, fake_item
+from tgmedia.cli import main
+from tgmedia.ports import NotAuthorized
+
+
+def factory(source: FakeSource):
+    return lambda retry: source
+
+
+def test_fetch_dry_run_json_reports_the_plan_and_downloads_nothing(tmp_path: Path, capsys) -> None:
+    source = FakeSource(
+        (
+            fake_item(message_id=1, data=b"a" * 10),
+            fake_item(message_id=2, data=b"b" * 20, kind="video"),
+            fake_item(message_id=3, data=b"c" * 5),
+        )
+    )
+    out = tmp_path / "downloads"
+
+    code = main(["fetch", "@demo", "--out", str(out), "--dry-run", "--json"], source_factory=factory(source))
+
+    plan = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert plan["mode"] == "plan"
+    assert plan["counts"] == {"photo": 2, "video": 1}
+    assert plan["total_items"] == 3
+    assert plan["total_bytes"] == 35
+    assert plan["skipped"] == 0
+    assert plan["root"] == str(out)
+    assert source.download_calls == []
+    assert out.exists() is False
+
+
+def test_fetch_unknown_chat_exits_2(tmp_path: Path, capsys) -> None:
+    source = FakeSource(())
+
+    code = main(["fetch", "@nowhere", "--out", str(tmp_path)], source_factory=factory(source))
+
+    assert code == 2
+    assert "unknown chat" in capsys.readouterr().err
+
+
+def test_fetch_not_logged_in_exits_3(tmp_path: Path) -> None:
+    def factory_that_is_not_logged_in(retry: int) -> FakeSource:
+        raise NotAuthorized("the saved session is missing or expired")
+
+    code = main(["fetch", "@demo", "--out", str(tmp_path)], source_factory=factory_that_is_not_logged_in)
+
+    assert code == 3
+
+
+@pytest.mark.parametrize(
+    ("flag", "value", "expected"),
+    [
+        ("--min-size", "10x", "invalid size"),
+        ("--max-size", "2 slices", "invalid size"),
+        ("--since", "2024-13-45", "invalid date"),
+        ("--until", "yesterday", "invalid date"),
+        ("--kind", "hologram", "unknown kind"),
+    ],
+)
+def test_bad_option_values_exit_2_with_a_message(
+    flag: str, value: str, expected: str, tmp_path: Path, capsys
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["fetch", "@demo", "--out", str(tmp_path), flag, value], source_factory=factory(FakeSource(())))
+
+    assert exit_info.value.code == 2
+    assert expected in capsys.readouterr().err
+
+
+def test_fetch_end_to_end_writes_files_with_expected_names_and_bytes(tmp_path: Path) -> None:
+    source = FakeSource(
+        (
+            fake_item(message_id=101, data=b"\x89PNG-bytes", file_name="beach.PNG"),
+            fake_item(message_id=102, data=b"video-bytes", kind="video", file_name="clip.mov"),
+            fake_item(message_id=103, data=b"notes-bytes", kind="document", file_name="notes.txt"),
+            fake_item(message_id=104, data=b"voice-bytes", kind="voice"),
+            fake_item(message_id=105, data=b"audio-bytes", kind="audio", file_name="song.flac"),
+            fake_item(message_id=106, data=b"sticker-bytes", kind="sticker"),
+        )
+    )
+    root = tmp_path / "downloads"
+    argv = ["fetch", "@demo", "--out", str(root)]
+
+    assert main(argv, source_factory=factory(source)) == 0
+
+    expected = {
+        root / "demo" / "photos" / "2024-05-01_101.png": b"\x89PNG-bytes",
+        root / "demo" / "videos" / "2024-05-01_102.mov": b"video-bytes",
+        root / "demo" / "documents" / "2024-05-01_103.txt": b"notes-bytes",
+        root / "demo" / "voice" / "2024-05-01_104.ogg": b"voice-bytes",
+        root / "demo" / "audio" / "2024-05-01_105.flac": b"audio-bytes",
+        root / "demo" / "stickers" / "2024-05-01_106.webp": b"sticker-bytes",
+    }
+    for path, data in expected.items():
+        assert path.read_bytes() == data, path
+    assert sorted(str(path.relative_to(root)) for path in root.rglob("*") if path.is_file()) == sorted(
+        [str(path.relative_to(root)) for path in expected] + [".tgmedia/ledger.json"]
+    )
+    assert list(root.rglob("*.part")) == []
+    assert len(source.download_calls) == 6
+
+    assert main(argv, source_factory=factory(source)) == 0
+    assert len(source.download_calls) == 6
+    for path, data in expected.items():
+        assert path.read_bytes() == data, path
+
+
+def test_fetch_json_summary_reports_states_and_exit_code(tmp_path: Path, capsys) -> None:
+    source = FakeSource(
+        (fake_item(message_id=1, data=b"ok"), fake_item(message_id=2, data=b"bad")),
+        failures={2: OSError("disk full")},
+    )
+
+    code = main(
+        ["fetch", "@demo", "--out", str(tmp_path / "out"), "--json"], source_factory=factory(source)
+    )
+
+    summary = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert summary["mode"] == "summary"
+    assert summary["downloaded"] == 1
+    assert summary["failed"] == 1
+    assert summary["total_bytes"] == 2
+    failed = next(item for item in summary["items"] if item["state"] == "failed")
+    assert "disk full" in failed["error"]
