@@ -43,6 +43,7 @@ from .ports import (
     MessageWithoutMedia,
     NotAuthorized,
     NullSink,
+    SourceError,
     TelegramSource,
 )
 
@@ -160,6 +161,16 @@ def _parse_until(value: str) -> datetime:
     return datetime.combine(moment.date(), time.max, tzinfo=moment.tzinfo) if date_only else moment
 
 
+def _parse_message_id(value: str) -> int:
+    try:
+        message_id = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid message id {value!r}; use the number from the message link") from None
+    if message_id < 1:
+        raise argparse.ArgumentTypeError(f"message ids start at 1, not {message_id}")
+    return message_id
+
+
 def _parse_kinds(value: str) -> frozenset[MediaKind]:
     names = [name for name in value.replace(",", " ").split() if name]
     if not names:
@@ -181,7 +192,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     fetch = commands.add_parser("fetch", help="download media from one chat")
     fetch.add_argument("chat", help="@username, t.me link, numeric id, or a title substring")
-    fetch.add_argument("--message", type=int, default=None, help="download this one message id")
+    fetch.add_argument(
+        "--message", type=_parse_message_id, default=None, help="download this one message id"
+    )
     fetch.add_argument(
         "--kind",
         type=_parse_kinds,
@@ -393,6 +406,9 @@ async def _fetch(args: argparse.Namespace, factory: SourceFactory) -> int:
     except MessageWithoutMedia as exc:
         errors.print(f"[red]nothing to download[/red] in {args.chat}: {exc}")
         return EXIT_USAGE
+    except SourceError as exc:
+        errors.print(f"[red]Telegram refused the run[/red]: {exc}")
+        return EXIT_FAILED_ITEMS
     except NotAuthorized as exc:
         return _report_not_logged_in(errors, exc)
     except KeyboardInterrupt:

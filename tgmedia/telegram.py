@@ -27,7 +27,14 @@ from .domain import (
     parse_chat_query,
     part_path,
 )
-from .ports import AmbiguousChat, ChatNotFound, MediaGone, MessageWithoutMedia, NotAuthorized
+from .ports import (
+    AmbiguousChat,
+    ChatNotFound,
+    MediaGone,
+    MessageWithoutMedia,
+    NotAuthorized,
+    SourceError,
+)
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +98,16 @@ def _chat_kind(entity: object) -> str:
     if isinstance(entity, Channel):
         return "channel" if entity.broadcast else "group"
     return "group"
+
+
+def _source_error(exc: RPCError, context: str) -> SourceError:
+    if isinstance(exc, FloodWaitError):
+        if exc.seconds > 0:
+            return SourceError(
+                f"Telegram asked to wait {exc.seconds}s before {context}; run the command again after that"
+            )
+        return SourceError(f"Telegram rate-limited {context}; run the command again shortly")
+    return SourceError(f"{context}: {type(exc).__name__}: {exc}")
 
 
 def _summary(entity: object) -> ChatSummary:
@@ -166,20 +183,28 @@ class TelethonSource:
         client = await self._authorized_client()
         entity = await self._entity(client, chat)
         chat_id = utils.get_peer_id(entity)
-        async for message in client.iter_messages(
-            entity,
-            offset_date=selection.until,
-            reverse=False,
-            wait_time=1,
-        ):
-            item = _to_item(message, selection, chat_id)
-            if item is not None:
-                yield item
+        try:
+            async for message in client.iter_messages(
+                entity,
+                offset_date=selection.until,
+                reverse=False,
+                wait_time=1,
+            ):
+                item = _to_item(message, selection, chat_id)
+                if item is not None:
+                    yield item
+        except RPCError as exc:
+            # A long flood wait or a restricted chat mid-walk: a message the user
+            # can act on beats a traceback out of the event loop.
+            raise _source_error(exc, f"reading the history of {chat}") from None
 
     async def get_media(self, chat: str, message_id: int, selection: Selection) -> MediaItem:
         client = await self._authorized_client()
         entity = await self._entity(client, chat)
-        message = await client.get_messages(entity, ids=message_id)
+        try:
+            message = await client.get_messages(entity, ids=message_id)
+        except RPCError as exc:
+            raise _source_error(exc, f"fetching message {message_id}") from None
         if message is None:
             raise MessageWithoutMedia(f"message {message_id} does not exist")
         item = _to_item(message, selection, utils.get_peer_id(entity))

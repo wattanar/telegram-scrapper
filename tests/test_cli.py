@@ -10,7 +10,7 @@ import pytest
 
 from fakes import FakeSource, fake_item
 from tgmedia.cli import main
-from tgmedia.ports import NotAuthorized
+from tgmedia.ports import NotAuthorized, SourceError
 
 
 def factory(source: FakeSource):
@@ -282,3 +282,30 @@ def test_chats_lists_dialogs(capsys) -> None:
     printed = capsys.readouterr().out
     assert "Demo Group" in printed
     assert "demo" in printed
+
+
+def test_message_id_must_be_positive(capsys) -> None:
+    with pytest.raises(SystemExit) as raised:
+        main(["fetch", "@demo", "--message", "0"])
+
+    captured = capsys.readouterr()
+    assert raised.value.code == 2
+    assert "message ids start at 1" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_telegram_refusal_reports_the_reason_and_exits_1(capsys) -> None:
+    source = FakeSource((fake_item(),))
+
+    async def refuse(chat: str, selection):
+        raise SourceError("Telegram asked to wait 120s before reading the history of @demo")
+        yield  # never reached; the raise above makes this an async generator
+
+    source.iter_media = refuse  # type: ignore[method-assign]
+
+    code = main(["fetch", "@demo", "--out", "downloads"], source_factory=factory(source))
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "asked to wait 120s" in captured.err
+    assert "Traceback" not in captured.err

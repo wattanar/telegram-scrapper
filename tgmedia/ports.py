@@ -38,6 +38,10 @@ class MessageWithoutMedia(LookupError):
     """The requested message exists but carries nothing downloadable."""
 
 
+class SourceError(RuntimeError):
+    """Telegram refused the request; the text is safe to show the user."""
+
+
 class TelegramSource(Protocol):
     async def close(self) -> None: ...
 

@@ -98,7 +98,7 @@ tgmedia fetch @groupname --out ./downloads --min-size 10k --max-size 2g --limit 
 | `--json` | print the plan or the summary as JSON on stdout, nothing else |
 | `--quiet` | no progress bars and no summary |
 
-Exit codes: `0` everything requested is on disk, `1` at least one item failed, `2` usage error, unknown chat, ambiguous chat, or a message with nothing to download, `3` not logged in.
+Exit codes: `0` everything requested is on disk, `1` at least one item failed or Telegram refused the run, `2` usage error, unknown chat, ambiguous chat, or a message with nothing to download, `3` not logged in.
 
 ## Idempotency
 
