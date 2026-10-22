@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
+
+import pytest
 
 from fakes import DEMO_CHAT, FakeSource, fake_item
 from tgmedia.domain import ItemState, MediaKind, Selection, destination, part_path
-from tgmedia.fetcher import plan, run
+from tgmedia.fetcher import plan, plan_message, run
 from tgmedia.ledger import Ledger
+from tgmedia.ports import MessageWithoutMedia
 
 
 def open_ledger(root: Path) -> Ledger:
@@ -204,3 +208,50 @@ async def test_writes_land_in_the_kind_subdirectory_of_the_chat_slug(tmp_path: P
     await fetch(FakeSource((item,), chat=DEMO_CHAT), root)
 
     assert (root / "demo" / "gifs" / "2024-05-01_8.gif").read_bytes() == b"gif"
+
+
+async def test_plan_message_returns_only_the_named_message(tmp_path: Path) -> None:
+    root = tmp_path / "downloads"
+    source = FakeSource((fake_item(message_id=1, data=b"one"), fake_item(message_id=2, data=b"named")))
+
+    prepared = await plan_message(source, "@demo", 2, Selection(), root, open_ledger(root))
+
+    assert [item.message_id for item in prepared.items] == [2]
+    assert prepared.skipped == ()
+    assert prepared.counts == {MediaKind.from_name("photo"): 1}
+    assert prepared.total_bytes == len(b"named")
+    assert source.get_calls == [2]
+
+
+async def test_plan_message_skips_a_message_the_ledger_already_holds(tmp_path: Path) -> None:
+    root = tmp_path / "downloads"
+    await fetch(FakeSource((fake_item(message_id=2, data=b"named"),)), root)
+    source = FakeSource((fake_item(message_id=2, data=b"named"),))
+    ledger = open_ledger(root)
+
+    prepared = await plan_message(source, "@demo", 2, Selection(), root, ledger)
+    summary = await run(source, prepared, ledger)
+
+    assert prepared.items == ()
+    assert [item.message_id for item in prepared.skipped] == [2]
+    assert states(summary) == {2: ItemState.SKIPPED}
+    assert source.download_calls == []
+
+
+@pytest.mark.parametrize(
+    ("selection", "filter_name"),
+    [
+        (Selection(kinds=frozenset({MediaKind.from_name("video")})), "--kind"),
+        (Selection(since=datetime(2024, 6, 1, tzinfo=timezone.utc)), "--since"),
+        (Selection(until=datetime(2024, 4, 1, tzinfo=timezone.utc)), "--until"),
+        (Selection(min_size=10_000), "--min-size"),
+        (Selection(max_size=1), "--max-size"),
+    ],
+)
+async def test_plan_message_names_the_filter_that_rejected_the_message(
+    tmp_path: Path, selection: Selection, filter_name: str
+) -> None:
+    source = FakeSource((fake_item(message_id=2, data=b"named"),))
+
+    with pytest.raises(MessageWithoutMedia, match=rf"message 2 .*{filter_name}"):
+        await plan_message(source, "@demo", 2, selection, tmp_path / "downloads", open_ledger(tmp_path))

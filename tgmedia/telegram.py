@@ -27,7 +27,7 @@ from .domain import (
     parse_chat_query,
     part_path,
 )
-from .ports import AmbiguousChat, ChatNotFound, MediaGone, NotAuthorized
+from .ports import AmbiguousChat, ChatNotFound, MediaGone, MessageWithoutMedia, NotAuthorized
 
 log = logging.getLogger(__name__)
 
@@ -175,6 +175,22 @@ class TelethonSource:
             item = _to_item(message, selection, chat_id)
             if item is not None:
                 yield item
+
+    async def get_media(self, chat: str, message_id: int, selection: Selection) -> MediaItem:
+        client = await self._authorized_client()
+        entity = await self._entity(client, chat)
+        message = await client.get_messages(entity, ids=message_id)
+        if message is None:
+            raise MessageWithoutMedia(f"message {message_id} does not exist")
+        item = _to_item(message, selection, utils.get_peer_id(entity))
+        if item is None:
+            # `_to_item` folds the topic filter into its None, so name that filter here.
+            if selection.thread is not None and topic_id(message) != selection.thread:
+                raise MessageWithoutMedia(
+                    f"message {message_id} is not in forum topic {selection.thread}"
+                )
+            raise MessageWithoutMedia(f"message {message_id} carries no downloadable media")
+        return item
 
     async def download(
         self,

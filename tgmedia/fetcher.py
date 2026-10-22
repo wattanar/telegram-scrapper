@@ -21,7 +21,7 @@ from .domain import (
     part_path,
 )
 from .ledger import Ledger
-from .ports import NullSink, ProgressSink, TelegramSource
+from .ports import MessageWithoutMedia, NullSink, ProgressSink, TelegramSource
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +87,48 @@ async def plan(
         counts=dict(counts),
         total_bytes=total_bytes,
     )
+
+
+async def plan_message(
+    source: TelegramSource,
+    chat: str,
+    message_id: int,
+    selection: Selection,
+    root: Path,
+    ledger: Ledger,
+) -> Plan:
+    """Plan the one message the user named, instead of walking the history."""
+    resolved = await source.resolve_chat(chat)
+    item = await source.get_media(chat, message_id, selection)
+    if not selection.matches(item):
+        raise MessageWithoutMedia(f"message {message_id} {_rejected_by(selection, item)}")
+    captured = ledger.get(item.chat_id, item.message_id) is not None
+    items = () if captured else (item,)
+    return Plan(
+        chat=resolved,
+        root=Path(root),
+        items=items,
+        skipped=(item,) if captured else (),
+        counts=dict(Counter(item.kind for item in items)),
+        total_bytes=sum(item.size or 0 for item in items),
+    )
+
+
+def _rejected_by(selection: Selection, item: MediaItem) -> str:
+    """Name the filter that rejected a named message; only called once `matches` says no."""
+    if selection.kinds is not None and item.kind not in selection.kinds:
+        asked = ", ".join(sorted(kind.name for kind in selection.kinds))
+        return f"is a {item.kind.name}, and --kind asked for {asked}"
+    if selection.since is not None and item.date < selection.since:
+        return f"is dated {item.date:%Y-%m-%d}, before --since {selection.since:%Y-%m-%d}"
+    if selection.until is not None and item.date > selection.until:
+        return f"is dated {item.date:%Y-%m-%d}, after --until {selection.until:%Y-%m-%d}"
+    if item.size is not None:
+        if selection.min_size is not None and item.size < selection.min_size:
+            return f"is {item.size} bytes, under --min-size {selection.min_size}"
+        if selection.max_size is not None and item.size > selection.max_size:
+            return f"is {item.size} bytes, over --max-size {selection.max_size}"
+    return "does not match the filters"
 
 
 async def run(

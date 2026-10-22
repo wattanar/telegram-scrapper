@@ -158,6 +158,101 @@ def test_fetch_json_summary_reports_states_and_exit_code(tmp_path: Path, capsys)
     assert "disk full" in failed["error"]
 
 
+def test_fetch_message_writes_only_the_named_message(tmp_path: Path) -> None:
+    source = FakeSource(
+        (
+            fake_item(message_id=1, data=b"ignored"),
+            fake_item(message_id=2, data=b"chosen", file_name="chosen.jpg"),
+            fake_item(message_id=3, data=b"ignored too"),
+        )
+    )
+    root = tmp_path / "downloads"
+
+    code = main(["fetch", "@demo", "--message", "2", "--out", str(root)], source_factory=factory(source))
+
+    written = root / "demo" / "photos" / "2024-05-01_2.jpg"
+    assert code == 0
+    assert written.read_bytes() == b"chosen"
+    assert sorted(path.name for path in root.rglob("*") if path.is_file()) == [
+        "2024-05-01_2.jpg",
+        "ledger.json",
+    ]
+    assert [item.message_id for item in source.download_calls] == [2]
+
+
+def test_fetch_message_link_writes_the_same_file(tmp_path: Path) -> None:
+    source = FakeSource((fake_item(message_id=2, data=b"chosen", file_name="chosen.jpg"),))
+    root = tmp_path / "downloads"
+
+    code = main(["fetch", "https://t.me/demo/2", "--out", str(root)], source_factory=factory(source))
+
+    assert code == 0
+    assert (root / "demo" / "photos" / "2024-05-01_2.jpg").read_bytes() == b"chosen"
+    assert [item.message_id for item in source.download_calls] == [2]
+
+
+def test_message_flag_wins_over_the_link_id(tmp_path: Path) -> None:
+    source = FakeSource((fake_item(message_id=2, data=b"flag"), fake_item(message_id=5, data=b"link")))
+
+    code = main(
+        ["fetch", "https://t.me/demo/5", "--message", "2", "--out", str(tmp_path)],
+        source_factory=factory(source),
+    )
+
+    assert code == 0
+    assert [item.message_id for item in source.download_calls] == [2]
+
+
+def test_fetch_message_twice_downloads_it_once(tmp_path: Path, capsys) -> None:
+    source = FakeSource((fake_item(message_id=2, data=b"chosen"),))
+    root = tmp_path / "downloads"
+    argv = ["fetch", "@demo", "--message", "2", "--out", str(root)]
+    assert main(argv, source_factory=factory(source)) == 0
+    capsys.readouterr()
+
+    code = main([*argv, "--json"], source_factory=factory(source))
+
+    summary = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert summary["downloaded"] == 0
+    assert summary["skipped"] == 1
+    assert len(source.download_calls) == 1
+
+
+def test_fetch_message_rejected_by_a_kind_filter_exits_2(tmp_path: Path, capsys) -> None:
+    source = FakeSource((fake_item(message_id=2, data=b"chosen"),))
+
+    code = main(
+        ["fetch", "@demo", "--message", "2", "--kind", "video", "--out", str(tmp_path)],
+        source_factory=factory(source),
+    )
+
+    reported = capsys.readouterr().err
+    assert code == 2
+    assert "@demo" in reported
+    assert "message 2" in reported
+    assert "--kind" in reported
+    assert source.download_calls == []
+
+
+def test_fetch_message_dry_run_json_plans_one_item(tmp_path: Path, capsys) -> None:
+    source = FakeSource((fake_item(message_id=2, data=b"chosen"), fake_item(message_id=3)))
+    root = tmp_path / "downloads"
+
+    code = main(
+        ["fetch", "@demo", "--message", "2", "--dry-run", "--json", "--out", str(root)],
+        source_factory=factory(source),
+    )
+
+    plan = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert plan["mode"] == "plan"
+    assert plan["total_items"] == 1
+    assert plan["counts"] == {"photo": 1}
+    assert source.download_calls == []
+    assert root.exists() is False
+
+
 def raising_factory(error: Exception):
     def build(retry: int):
         raise error

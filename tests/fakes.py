@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from tgmedia.domain import ChatSummary, MediaItem, MediaKind, Selection, part_path
-from tgmedia.ports import ChatNotFound
+from tgmedia.domain import ChatSummary, MediaItem, MediaKind, Selection, parse_chat_query, part_path
+from tgmedia.ports import ChatNotFound, MessageWithoutMedia
 
 DEMO_CHAT = ChatSummary(chat_id=-1001234567890, title="Demo Group", username="demo", kind="group")
 
@@ -55,6 +55,7 @@ class FakeSource:
         self.chat = chat
         self.failures = dict(failures or {})
         self.download_calls: list[MediaItem] = []
+        self.get_calls: list[int] = []
         self.closed = False
 
     async def close(self) -> None:
@@ -64,6 +65,16 @@ class FakeSource:
         for item in self.items:
             if selection.matches(item):
                 yield item
+
+    async def get_media(self, chat: str, message_id: int, selection: Selection) -> MediaItem:
+        self.get_calls.append(message_id)
+        failure = self.failures.get(message_id)
+        if failure is not None:
+            raise failure
+        for item in self.items:
+            if item.message_id == message_id:
+                return item
+        raise MessageWithoutMedia(f"message {message_id} carries no downloadable media")
 
     async def download(
         self,
@@ -84,8 +95,14 @@ class FakeSource:
         return dest
 
     async def resolve_chat(self, query: str) -> ChatSummary:
-        known = {"@demo", "demo", self.chat.title, str(self.chat.chat_id), "https://t.me/demo"}
-        if query.strip() in known:
+        names = {
+            f"@{self.chat.username}",
+            self.chat.username or "",
+            self.chat.title,
+            str(self.chat.chat_id),
+        }
+        # A link that carries a message id names the chat the same way the domain parses it.
+        if query.strip() in names or str(parse_chat_query(query).target) in names:
             return self.chat
         raise ChatNotFound(f"no chat matches {query!r}")
 

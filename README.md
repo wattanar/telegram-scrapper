@@ -58,7 +58,7 @@ The session lands in `~/.config/tgmedia/session` as a `StringSession` with mode 
 ```
 tgmedia login
 tgmedia chats [--search Q]
-tgmedia fetch <chat> [options]
+tgmedia fetch <chat> [--message N] [options]
 ```
 
 `tgmedia chats` lists your dialogs as a table of id, kind, username, and title.
@@ -80,13 +80,14 @@ tgmedia fetch https://t.me/groupname --since 2024-01-01 --kind photo,video --dry
 tgmedia fetch @groupname --out ./downloads --min-size 10k --max-size 2g --limit 200
 ```
 
-`<chat>` accepts `@username`, a `t.me` link (`t.me/name`, `t.me/name/12`, `t.me/c/1234/56`), a numeric id (`-100...`), or a case-insensitive substring of a dialog title. An ambiguous substring prints every candidate and exits 2.
+`<chat>` accepts `@username`, a `t.me` link (`t.me/name`, `t.me/name/12`, `t.me/c/1234/56`), a numeric id (`-100...`), or a case-insensitive substring of a dialog title. An ambiguous substring prints every candidate and exits 2. A link that carries a message id downloads that one message, so a link pasted straight from Telegram needs no flag.
 
 | flag | meaning |
 | --- | --- |
 | `--kind photo,video,...` | only these kinds. One of photo, sticker, gif, video, voice, audio, document |
 | `--since`, `--until` | inclusive bounds. `YYYY-MM-DD` or a full ISO timestamp. A bare date on `--until` covers that whole UTC day |
 | `--min-size`, `--max-size` | inclusive byte bounds. `500`, `10k`, `2g` |
+| `--message N` | download that one message instead of walking the history |
 | `--limit N` | stop after N new items |
 | `--thread N` | only messages in that forum topic |
 | `--out DIR` | destination root, default `./downloads` |
@@ -97,7 +98,7 @@ tgmedia fetch @groupname --out ./downloads --min-size 10k --max-size 2g --limit 
 | `--json` | print the plan or the summary as JSON on stdout, nothing else |
 | `--quiet` | no progress bars and no summary |
 
-Exit codes: `0` everything requested is on disk, `1` at least one item failed, `2` usage error, unknown chat, or ambiguous chat, `3` not logged in.
+Exit codes: `0` everything requested is on disk, `1` at least one item failed, `2` usage error, unknown chat, ambiguous chat, or a message with nothing to download, `3` not logged in.
 
 ## Idempotency
 

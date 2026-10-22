@@ -34,10 +34,16 @@ class MediaGone(RuntimeError):
     """The message was deleted, or it no longer carries downloadable media."""
 
 
+class MessageWithoutMedia(LookupError):
+    """The requested message exists but carries nothing downloadable."""
+
+
 class TelegramSource(Protocol):
     async def close(self) -> None: ...
 
     def iter_media(self, chat: str, selection: Selection) -> AsyncIterator[MediaItem]: ...
+
+    async def get_media(self, chat: str, message_id: int, selection: Selection) -> MediaItem: ...
 
     async def download(
         self,

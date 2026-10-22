@@ -33,10 +33,18 @@ from .domain import (
     MediaKind,
     MediaKindError,
     Selection,
+    parse_chat_query,
 )
-from .fetcher import Plan, RunSummary, plan, run
+from .fetcher import Plan, RunSummary, plan, plan_message, run
 from .ledger import LEDGER_RELPATH, Ledger
-from .ports import AmbiguousChat, ChatNotFound, NotAuthorized, NullSink, TelegramSource
+from .ports import (
+    AmbiguousChat,
+    ChatNotFound,
+    MessageWithoutMedia,
+    NotAuthorized,
+    NullSink,
+    TelegramSource,
+)
 
 DEFAULT_OUT = "downloads"
 DEFAULT_CONCURRENCY = 4
@@ -173,6 +181,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     fetch = commands.add_parser("fetch", help="download media from one chat")
     fetch.add_argument("chat", help="@username, t.me link, numeric id, or a title substring")
+    fetch.add_argument("--message", type=int, default=None, help="download this one message id")
     fetch.add_argument(
         "--kind",
         type=_parse_kinds,
@@ -352,11 +361,20 @@ async def _fetch(args: argparse.Namespace, factory: SourceFactory) -> int:
     )
     root = Path(args.out).expanduser()
     ledger = Ledger.load(root / LEDGER_RELPATH)
+    try:
+        query = parse_chat_query(args.chat)
+    except ValueError as exc:
+        errors.print(f"[red]unknown chat[/red]: {args.chat}: {exc}")
+        return EXIT_USAGE
+    message_id = args.message if args.message is not None else query.message_id
     source: TelegramSource | None = None
     sink: NullSink | RichSink = NullSink()
     try:
         source = factory(args.retry)
-        prepared = await plan(source, args.chat, selection, root, ledger, dedupe=not args.no_dedupe)
+        if message_id is None:
+            prepared = await plan(source, args.chat, selection, root, ledger, dedupe=not args.no_dedupe)
+        else:
+            prepared = await plan_message(source, args.chat, message_id, selection, root, ledger)
         if args.dry_run:
             if args.json:
                 print(json.dumps(_plan_json(prepared)))
@@ -371,6 +389,9 @@ async def _fetch(args: argparse.Namespace, factory: SourceFactory) -> int:
         return EXIT_USAGE
     except ChatNotFound as exc:
         errors.print(f"[red]unknown chat[/red]: {exc}")
+        return EXIT_USAGE
+    except MessageWithoutMedia as exc:
+        errors.print(f"[red]nothing to download[/red] in {args.chat}: {exc}")
         return EXIT_USAGE
     except NotAuthorized as exc:
         return _report_not_logged_in(errors, exc)
