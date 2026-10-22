@@ -8,23 +8,50 @@ Download the media out of a Telegram group or channel, signed in as yourself.
 
 The Bot API cannot read group history. A bot only sees messages sent after it joined, and only what its admin rights allow it to fetch, so backfilling a group is impossible with a bot token. `tgmedia` signs in as you over MTProto with Telethon, which means it sees the same history your client sees.
 
-## Setup
+## Install
 
-1. Get an `api_id` and `api_hash` from [my.telegram.org](https://my.telegram.org) under API development tools. They identify the application, not your account.
-2. Install the package.
+Python 3.11 or newer is required.
 
 ```
 python -m venv .venv
 .venv/bin/pip install -e .
 ```
 
-3. Sign in once. `tgmedia login` reads `TG_API_ID` and `TG_API_HASH` from the environment, else `~/.config/tgmedia/config.toml`, else it prompts for both and offers to write that config file with mode 0600.
+That install puts the `tgmedia` command in `.venv/bin`, which is on your PATH only while that environment is active. Do one of these two things to run the bare command from any directory.
+
+- Activate the environment first. `source .venv/bin/activate`
+- Link it once into a directory that is already on your PATH. `ln -sfn "$PWD/.venv/bin/tgmedia" ~/.local/bin/tgmedia`
+
+Then confirm that `tgmedia --help` prints the usage text.
+
+## Credentials
+
+`tgmedia` needs an `api_id` and an `api_hash` for a Telegram application. Get both from [my.telegram.org](https://my.telegram.org) under API development tools. They identify the application, not your account, and every Telegram client on the machine can share one pair.
+
+It reads them from the first source that supplies both.
+
+| Source | How |
+| --- | --- |
+| Environment | `TG_API_ID` and `TG_API_HASH`. One variable without the other is ignored |
+| Config file | `~/.config/tgmedia/config.toml` |
+| Login prompt | `tgmedia login` asks for both when neither source has them, then offers to write the config file |
+
+The config file is TOML, and the login prompt writes it with mode 0600.
 
 ```
-tgmedia login
+api_id = 123456
+api_hash = "0123456789abcdef0123456789abcdef"
 ```
 
-The session is stored as a `StringSession` at `~/.config/tgmedia/session` with mode 0600. That file is equivalent to your password, so keep it private.
+Set `TGMEDIA_CONFIG_DIR` to keep the config and the session in a different directory, for example one per Telegram account.
+
+## Sign in
+
+`tgmedia login` signs in as a user account, not a bot, because only a user account can read group history. It asks for your phone number with the country code, then the code Telegram sends you in the app, then your two-factor password if you set one.
+
+The session lands in `~/.config/tgmedia/session` as a `StringSession` with mode 0600, and every later command reuses it. That file is equivalent to your password. Keep it private, and revoke the entry in Telegram's active sessions list if it leaks.
+
+`tgmedia chats` and `tgmedia fetch` exit with code 3 when the session is missing or expired, and print the command that fixes it.
 
 ## Commands
 
@@ -35,6 +62,15 @@ tgmedia fetch <chat> [options]
 ```
 
 `tgmedia chats` lists your dialogs as a table of id, kind, username, and title.
+
+A first pull goes in this order.
+
+```
+tgmedia login
+tgmedia chats --search project
+tgmedia fetch @project --dry-run
+tgmedia fetch @project
+```
 
 `tgmedia fetch --dry-run` prints the plan for that chat: per-kind item counts, the total size, how many items the ledger already has, and the destination root. It downloads nothing and creates nothing.
 
@@ -86,7 +122,7 @@ downloads/
   .tgmedia/ledger.json
 ```
 
-The chat folder is the username when the chat has one, else the title, with every character outside letters, digits, `_` and `-` replaced by `-`. The file name is `<UTC date>_<message id>_<document id>.<ext>`. The extension comes from the original file name when Telegram reports one, else from the kind default (photo `jpg`, sticker `webp`, gif `mp4`, video `mp4`, voice `ogg`, audio `mp3`, document `bin`). Video notes count as videos. Every name stays under 160 characters and cannot leave the destination root.
+The chat folder is the username when the chat has one, else the title, with every character outside letters, digits, `_` and `-` replaced by `-`. The file name is `<UTC date>_<message id>_<document id>.<ext>`, with the document id omitted when Telegram reports none. The extension comes from the original file name when Telegram reports one, else from the kind default (photo `jpg`, sticker `webp`, gif `mp4`, video `mp4`, voice `ogg`, audio `mp3`, document `bin`). Video notes count as videos. Every name stays under 160 characters and cannot leave the destination root.
 
 ## Not included
 
