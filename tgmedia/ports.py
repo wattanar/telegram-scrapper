@@ -6,7 +6,14 @@ from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Protocol
 
-from .domain import ChatSummary, FetchResult, MediaItem, ResolvedChat, Selection
+from .domain import (
+    ChatSummary,
+    FetchResult,
+    MediaItem,
+    MessageRef,
+    ResolvedChat,
+    Selection,
+)
 
 
 class ChatLookupError(LookupError):
@@ -47,7 +54,7 @@ class TelegramSource(Protocol):
 
     def iter_media(self, chat: str, selection: Selection) -> AsyncIterator[MediaItem]: ...
 
-    async def get_media(self, chat: str, message_id: int, selection: Selection) -> MediaItem: ...
+    async def get_media(self, chat: str, ref: MessageRef, selection: Selection) -> MediaItem: ...
 
     async def download(
         self,

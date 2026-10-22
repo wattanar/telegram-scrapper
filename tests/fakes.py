@@ -8,10 +8,21 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from tgmedia.domain import ChatSummary, MediaItem, MediaKind, Selection, parse_chat_query, part_path
+from tgmedia.domain import (
+    ChatSummary,
+    MediaItem,
+    MediaKind,
+    MessageRef,
+    Selection,
+    parse_chat_query,
+    part_path,
+)
 from tgmedia.ports import ChatNotFound, MessageWithoutMedia
 
 DEMO_CHAT = ChatSummary(chat_id=-1001234567890, title="Demo Group", username="demo", kind="group")
+DISCUSSION_CHAT = ChatSummary(
+    chat_id=-1004389109274, title="Demo Comments", username=None, kind="group"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +66,7 @@ class FakeSource:
         self.chat = chat
         self.failures = dict(failures or {})
         self.download_calls: list[MediaItem] = []
-        self.get_calls: list[int] = []
+        self.get_calls: list[MessageRef] = []
         self.closed = False
 
     async def close(self) -> None:
@@ -66,15 +77,16 @@ class FakeSource:
             if selection.matches(item):
                 yield item
 
-    async def get_media(self, chat: str, message_id: int, selection: Selection) -> MediaItem:
-        self.get_calls.append(message_id)
+    async def get_media(self, chat: str, ref: MessageRef, selection: Selection) -> MediaItem:
+        self.get_calls.append(ref)
+        message_id = ref.comment_id or ref.post_id
         failure = self.failures.get(message_id)
         if failure is not None:
             raise failure
         for item in self.items:
             if item.message_id == message_id:
                 return item
-        raise MessageWithoutMedia(f"message {message_id} carries no downloadable media")
+        raise MessageWithoutMedia(f"{ref.label} carries no downloadable media")
 
     async def download(
         self,

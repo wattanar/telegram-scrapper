@@ -29,9 +29,11 @@ from .domain import (
     KINDS,
     FetchResult,
     ItemState,
+    LinkError,
     MediaItem,
     MediaKind,
     MediaKindError,
+    MessageRef,
     Selection,
     parse_chat_query,
 )
@@ -376,18 +378,26 @@ async def _fetch(args: argparse.Namespace, factory: SourceFactory) -> int:
     ledger = Ledger.load(root / LEDGER_RELPATH)
     try:
         query = parse_chat_query(args.chat)
+    except LinkError as exc:  # first: LinkError subclasses ValueError
+        errors.print(f"[red]bad link[/red]: {exc}")
+        return EXIT_USAGE
     except ValueError as exc:
         errors.print(f"[red]unknown chat[/red]: {args.chat}: {exc}")
         return EXIT_USAGE
-    message_id = args.message if args.message is not None else query.message_id
+    ref = query.ref
+    if args.message is not None:
+        if ref is not None and ref.comment_id is not None:
+            errors.print("[red]usage[/red]: --message cannot be combined with a comment link")
+            return EXIT_USAGE
+        ref = MessageRef(args.message)
     source: TelegramSource | None = None
     sink: NullSink | RichSink = NullSink()
     try:
         source = factory(args.retry)
-        if message_id is None:
+        if ref is None:
             prepared = await plan(source, args.chat, selection, root, ledger, dedupe=not args.no_dedupe)
         else:
-            prepared = await plan_message(source, args.chat, message_id, selection, root, ledger)
+            prepared = await plan_message(source, args.chat, ref, selection, root, ledger)
         if args.dry_run:
             if args.json:
                 print(json.dumps(_plan_json(prepared)))

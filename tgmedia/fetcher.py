@@ -15,6 +15,7 @@ from .domain import (
     ItemState,
     MediaItem,
     MediaKind,
+    MessageRef,
     Selection,
     chat_slug,
     destination,
@@ -92,16 +93,16 @@ async def plan(
 async def plan_message(
     source: TelegramSource,
     chat: str,
-    message_id: int,
+    ref: MessageRef,
     selection: Selection,
     root: Path,
     ledger: Ledger,
 ) -> Plan:
     """Plan the one message the user named, instead of walking the history."""
     resolved = await source.resolve_chat(chat)
-    item = await source.get_media(chat, message_id, selection)
+    item = await source.get_media(chat, ref, selection)
     if not selection.matches(item):
-        raise MessageWithoutMedia(f"message {message_id} {_rejected_by(selection, item)}")
+        raise MessageWithoutMedia(f"{ref.label} {_rejected_by(selection, item)}")
     captured = ledger.get(item.chat_id, item.message_id) is not None
     items = () if captured else (item,)
     return Plan(

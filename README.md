@@ -76,8 +76,11 @@ To pull one message instead of the history, pass the message link Telegram gave 
 
 ```
 tgmedia fetch https://t.me/project/45
+tgmedia fetch https://t.me/project/45?comment=1201
 tgmedia fetch @project --message 45
 ```
+
+A link to a comment pulls the media in that comment, and the file lands in the folder of the chat you named.
 
 `tgmedia fetch --dry-run` prints the plan for that chat: per-kind item counts, the total size, how many items the ledger already has, and the destination root. It downloads nothing and creates nothing.
 
@@ -87,14 +90,14 @@ tgmedia fetch https://t.me/groupname --since 2024-01-01 --kind photo,video --dry
 tgmedia fetch @groupname --out ./downloads --min-size 10k --max-size 2g --limit 200
 ```
 
-`<chat>` accepts `@username`, a `t.me` link (`t.me/name`, `t.me/name/12`, `t.me/c/1234/56`), a numeric id (`-100...`), or a case-insensitive substring of a dialog title. An ambiguous substring prints every candidate and exits 2. A link that carries a message id downloads that one message, so a link pasted straight from Telegram needs no flag.
+`<chat>` accepts `@username`, a `t.me` link (`t.me/name`, `t.me/name/12`, `t.me/name/12?comment=34`, `t.me/c/1234/56`), a numeric id (`-100...`), or a case-insensitive substring of a dialog title. An ambiguous substring prints every candidate and exits 2. A link that carries a message id downloads that one message, so a link pasted straight from Telegram needs no flag. With `?comment=<id>` on the link, that one message is the comment.
 
 | flag | meaning |
 | --- | --- |
 | `--kind photo,video,...` | only these kinds. One of photo, sticker, gif, video, voice, audio, document |
 | `--since`, `--until` | inclusive bounds. `YYYY-MM-DD` or a full ISO timestamp. A bare date on `--until` covers that whole UTC day |
 | `--min-size`, `--max-size` | inclusive byte bounds. `500`, `10k`, `2g` |
-| `--message N` | download that one message instead of walking the history |
+| `--message N` | download that one message instead of walking the history, overriding the id a link carries. It cannot be combined with a comment link |
 | `--limit N` | stop after N new items |
 | `--thread N` | only messages in that forum topic |
 | `--out DIR` | destination root, default `./downloads` |
@@ -141,6 +144,8 @@ The failures you are likely to hit exit with a code and one sentence instead of 
 | `not logged in: the saved session is missing or expired` | Run `tgmedia login`. Exit 3 |
 | `'project' matches 3 chats; pass one of:` | Pick from the table it prints, and pass the `@username` or the numeric id. Exit 2 |
 | `nothing to download in @demo: message 2 is a photo, and --kind asked for video` | Drop the filter or drop `--message`. Exit 2 |
+| `nothing to download in <link>: message 799 has no comments` | The post has no comment thread, so the id cannot resolve. Open the post in Telegram and copy the link from a comment. Exit 2 |
+| `bad link: a comment link needs a post id, as in t.me/<name>/<post>?comment=<id>` | Copy the whole comment link from Telegram, including the post id. Exit 2 |
 | `Telegram refused the run: Telegram asked to wait 120s before reading the history` | Run the same command after the wait. Telegram rate-limits large walks, and the ledger keeps what already landed. Exit 1 |
 
 ## Development

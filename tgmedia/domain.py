@@ -7,11 +7,15 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 
 class MediaKindError(ValueError):
     """A kind name that is not in the registry."""
+
+
+class LinkError(ValueError):
+    """A link tgmedia cannot turn into one message reference."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,14 +101,29 @@ _NUMERIC = re.compile(r"-?\d+")
 
 
 @dataclass(frozen=True, slots=True)
+class MessageRef:
+    """The one message the user named. A comment id never travels without its post id."""
+
+    post_id: int
+    comment_id: int | None = None
+
+    @property
+    def label(self) -> str:
+        """`message 795` or `comment 11953 on message 795`, for the sentences the CLI prints."""
+        if self.comment_id is None:
+            return f"message {self.post_id}"
+        return f"comment {self.comment_id} on message {self.post_id}"
+
+
+@dataclass(frozen=True, slots=True)
 class ChatQuery:
-    """One parsed chat argument: what to resolve, plus the message id when it names one."""
+    """One parsed chat argument: what to resolve, plus the message it names when it names one."""
 
     target: str | int | None
-    message_id: int | None = None
+    ref: MessageRef | None = None
 
 
-def _link_parts(text: str) -> list[str] | None:
+def _link_parts(text: str) -> tuple[list[str], dict[str, list[str]]] | None:
     lowered = text.lower()
     for scheme in ("http://", "https://"):
         if lowered.startswith(scheme):
@@ -114,7 +133,21 @@ def _link_parts(text: str) -> list[str] | None:
         split = urlsplit(f"https://{text}")
     if split.netloc.lower() not in _LINK_HOSTS:
         return None
-    return [part for part in split.path.split("/") if part]
+    path = [part for part in split.path.split("/") if part]
+    return path, parse_qs(split.query, keep_blank_values=True)
+
+
+def _message_ref(post_id: int | None, params: dict[str, list[str]]) -> MessageRef | None:
+    """Build the one message a link names; this is where a comment id gets validated."""
+    raw = params.get("comment")
+    if raw is None:
+        return MessageRef(post_id) if post_id is not None else None
+    if post_id is None:
+        raise LinkError("a comment link needs a post id, as in t.me/<name>/<post>?comment=<id>")
+    value = raw[-1].strip()
+    if not value.isdigit() or int(value) < 1:
+        raise LinkError(f"comment id {value!r} is not a message id")
+    return MessageRef(post_id, int(value))
 
 
 def parse_chat_query(text: str) -> ChatQuery:
@@ -124,22 +157,23 @@ def parse_chat_query(text: str) -> ChatQuery:
         return ChatQuery(None)
     if stripped.startswith("@"):
         return ChatQuery(stripped)
-    parts = _link_parts(stripped)
-    if parts is None:
+    link = _link_parts(stripped)
+    if link is None:
         return ChatQuery(int(stripped) if _NUMERIC.fullmatch(stripped) else None)
+    parts, params = link
     if parts and parts[0] == "s" and len(parts) > 1:
         parts = parts[1:]
     if not parts:
-        return ChatQuery(None)
+        return ChatQuery(None, _message_ref(None, params))
     if parts[0] == "c" and len(parts) > 1 and parts[1].isdigit():
-        message_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
-        return ChatQuery(int(f"-100{parts[1]}"), message_id)
+        post_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+        return ChatQuery(int(f"-100{parts[1]}"), _message_ref(post_id, params))
     if parts[0].startswith("+") or parts[0] in _INVITE_SEGMENTS:
         raise ValueError(
             "invite links are not supported; use @username, a t.me/<name> link, or an id"
         )
-    message_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
-    return ChatQuery(f"@{parts[0]}", message_id)
+    post_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+    return ChatQuery(f"@{parts[0]}", _message_ref(post_id, params))
 
 
 class ItemState(StrEnum):

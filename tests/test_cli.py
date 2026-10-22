@@ -8,8 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from fakes import FakeSource, fake_item
+from fakes import DEMO_CHAT, DISCUSSION_CHAT, FakeSource, fake_item
 from tgmedia.cli import main
+from tgmedia.domain import MessageRef
 from tgmedia.ports import NotAuthorized, SourceError
 
 
@@ -201,6 +202,98 @@ def test_message_flag_wins_over_the_link_id(tmp_path: Path) -> None:
 
     assert code == 0
     assert [item.message_id for item in source.download_calls] == [2]
+    assert source.get_calls == [MessageRef(2)]
+
+
+def test_fetch_comment_link_writes_the_comment_into_the_named_chat_folder(
+    tmp_path: Path, capsys
+) -> None:
+    comment = fake_item(
+        message_id=11953, data=b"comment-video", kind="video", chat_id=DISCUSSION_CHAT.chat_id
+    )
+    source = FakeSource((comment,))
+    root = tmp_path / "downloads"
+    argv = ["fetch", "https://t.me/demo/795?comment=11953", "--out", str(root)]
+
+    assert main(argv, source_factory=factory(source)) == 0
+
+    written = root / "demo" / "videos" / "2024-05-01_11953.mp4"
+    assert written.read_bytes() == b"comment-video"
+    assert sorted(path.name for path in root.rglob("*") if path.is_file()) == [
+        "2024-05-01_11953.mp4",
+        "ledger.json",
+    ]
+    assert (root / "Demo Comments").exists() is False
+    assert source.get_calls == [MessageRef(795, 11953)]
+    assert list(json.loads((root / ".tgmedia" / "ledger.json").read_text())["items"]) == [
+        f"{DISCUSSION_CHAT.chat_id}:11953"
+    ]
+
+    capsys.readouterr()
+    assert main(argv, source_factory=factory(source)) == 0
+    assert len(source.download_calls) == 1
+
+
+def test_comment_link_dry_run_json_plans_one_item(tmp_path: Path, capsys) -> None:
+    comment = fake_item(
+        message_id=11953, data=b"comment-video", kind="video", chat_id=DISCUSSION_CHAT.chat_id
+    )
+    source = FakeSource((comment,))
+    root = tmp_path / "downloads"
+
+    code = main(
+        ["fetch", "https://t.me/demo/795?comment=11953", "--dry-run", "--json", "--out", str(root)],
+        source_factory=factory(source),
+    )
+
+    plan = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert plan["mode"] == "plan"
+    assert plan["total_items"] == 1
+    assert plan["counts"] == {"video": 1}
+    assert plan["chat"] == {
+        "id": DEMO_CHAT.chat_id,
+        "title": DEMO_CHAT.title,
+        "username": DEMO_CHAT.username,
+        "kind": DEMO_CHAT.kind,
+    }
+    assert source.download_calls == []
+    assert root.exists() is False
+
+
+def test_message_flag_with_a_comment_link_exits_2(tmp_path: Path, capsys) -> None:
+    source = FakeSource((fake_item(message_id=795, data=b"post"),))
+    root = tmp_path / "downloads"
+
+    code = main(
+        ["fetch", "https://t.me/demo/795?comment=11953", "--message", "795", "--out", str(root)],
+        source_factory=factory(source),
+    )
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "--message cannot be combined with a comment link" in captured.err
+    assert "Traceback" not in captured.err
+    assert source.get_calls == []
+    assert source.download_calls == []
+    assert root.exists() is False
+
+
+@pytest.mark.parametrize("link", ["t.me/demo?comment=5", "t.me/demo/795?comment=abc"])
+def test_bad_comment_link_exits_2_before_any_source_work(
+    link: str, tmp_path: Path, capsys
+) -> None:
+    source = FakeSource((fake_item(message_id=795),))
+    root = tmp_path / "downloads"
+
+    code = main(["fetch", link, "--out", str(root)], source_factory=factory(source))
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "bad link" in captured.err
+    assert "Traceback" not in captured.err
+    assert source.get_calls == []
+    assert root.exists() is False
 
 
 def test_fetch_message_twice_downloads_it_once(tmp_path: Path, capsys) -> None:

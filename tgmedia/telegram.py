@@ -15,13 +15,14 @@ from telethon import TelegramClient, utils
 from telethon.errors import FloodWaitError, RPCError
 from telethon.sessions import StringSession
 from telethon.tl.custom.message import Message
-from telethon.tl.types import Channel, MessageReplyHeader, User
+from telethon.tl.types import Channel, MessageReplyHeader, PeerChannel, User
 
 from .domain import (
     KINDS,
     ChatSummary,
     MediaItem,
     MediaKind,
+    MessageRef,
     ResolvedChat,
     Selection,
     parse_chat_query,
@@ -100,7 +101,7 @@ def _chat_kind(entity: object) -> str:
     return "group"
 
 
-def _source_error(exc: RPCError, context: str) -> SourceError:
+def _source_error(exc: Exception, context: str) -> SourceError:
     if isinstance(exc, FloodWaitError):
         if exc.seconds > 0:
             return SourceError(
@@ -198,24 +199,47 @@ class TelethonSource:
             # can act on beats a traceback out of the event loop.
             raise _source_error(exc, f"reading the history of {chat}") from None
 
-    async def get_media(self, chat: str, message_id: int, selection: Selection) -> MediaItem:
+    async def get_media(self, chat: str, ref: MessageRef, selection: Selection) -> MediaItem:
         client = await self._authorized_client()
-        entity = await self._entity(client, chat)
-        try:
-            message = await client.get_messages(entity, ids=message_id)
-        except RPCError as exc:
-            raise _source_error(exc, f"fetching message {message_id}") from None
+        host = await self._entity(client, chat)
+        message = await self._message(client, host, ref.post_id)
         if message is None:
-            raise MessageWithoutMedia(f"message {message_id} does not exist")
-        item = _to_item(message, selection, utils.get_peer_id(entity))
+            raise MessageWithoutMedia(f"message {ref.post_id} does not exist")
+        if ref.comment_id is not None:
+            host = await self._discussion(client, host, message, ref)
+            message = await self._message(client, host, ref.comment_id)
+            if message is None:
+                raise MessageWithoutMedia(f"{ref.label} does not exist")
+        item = _to_item(message, selection, utils.get_peer_id(host))
         if item is None:
             # `_to_item` folds the topic filter into its None, so name that filter here.
             if selection.thread is not None and topic_id(message) != selection.thread:
-                raise MessageWithoutMedia(
-                    f"message {message_id} is not in forum topic {selection.thread}"
-                )
-            raise MessageWithoutMedia(f"message {message_id} carries no downloadable media")
+                raise MessageWithoutMedia(f"{ref.label} is not in forum topic {selection.thread}")
+            raise MessageWithoutMedia(f"{ref.label} carries no downloadable media")
         return item
+
+    async def _message(
+        self, client: TelegramClient, entity: object, message_id: int
+    ) -> Message | None:
+        try:
+            return await client.get_messages(entity, ids=message_id)
+        except RPCError as exc:
+            raise _source_error(exc, f"fetching message {message_id}") from None
+
+    async def _discussion(
+        self, client: TelegramClient, host: object, post: Message, ref: MessageRef
+    ) -> object:
+        replies = post.replies
+        if replies is None:
+            raise MessageWithoutMedia(f"message {ref.post_id} has no comments")
+        if replies.channel_id is None:
+            return host
+        try:
+            discussion = await client.get_entity(PeerChannel(replies.channel_id))
+        except (ValueError, RPCError) as exc:
+            raise _source_error(exc, f"opening the comments of message {ref.post_id}") from None
+        self._by_id[utils.get_peer_id(discussion)] = discussion
+        return discussion
 
     async def download(
         self,
