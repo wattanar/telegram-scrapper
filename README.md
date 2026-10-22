@@ -72,6 +72,13 @@ tgmedia fetch @project --dry-run
 tgmedia fetch @project
 ```
 
+To pull one message instead of the history, pass the message link Telegram gave you, or the id on its own.
+
+```
+tgmedia fetch https://t.me/project/45
+tgmedia fetch @project --message 45
+```
+
 `tgmedia fetch --dry-run` prints the plan for that chat: per-kind item counts, the total size, how many items the ledger already has, and the destination root. It downloads nothing and creates nothing.
 
 ```
@@ -117,13 +124,34 @@ The ledger is a single writer, the orchestrator, and every save writes `ledger.j
 ```
 downloads/
   demo/
-    photos/2024-05-01_101.png
+    photos/2024-05-01_101.jpg
     videos/2024-05-01_102.mov
     voice/2024-05-01_104.ogg
   .tgmedia/ledger.json
 ```
 
-The chat folder is the username when the chat has one, else the title, with every character outside letters, digits, `_` and `-` replaced by `-`. The file name is `<UTC date>_<message id>_<document id>.<ext>`, with the document id omitted when Telegram reports none. The extension comes from the original file name when Telegram reports one, else from the kind default (photo `jpg`, sticker `webp`, gif `mp4`, video `mp4`, voice `ogg`, audio `mp3`, document `bin`). Video notes count as videos. Every name stays under 160 characters and cannot leave the destination root.
+The chat folder is the username when the chat has one, else the title. Every character outside Unicode letters, digits, `_` and `-` becomes `-`, so a Thai or Arabic title stays readable and a title with spaces becomes `หล-บให-ท-น` or `Demo-Group`. The file name is `<UTC date>_<message id>_<document id>.<ext>`, with the document id omitted when Telegram reports none. The extension comes from the original file name when Telegram reports one, else from the kind default (photo `jpg`, sticker `webp`, gif `mp4`, video `mp4`, voice `ogg`, audio `mp3`, document `bin`). Video notes count as videos. Every name stays under 160 characters and cannot leave the destination root.
+
+## When something goes wrong
+
+The failures you are likely to hit exit with a code and one sentence instead of a traceback.
+
+| What you see | What to do |
+| --- | --- |
+| `not logged in: the saved session is missing or expired` | Run `tgmedia login`. Exit 3 |
+| `'project' matches 3 chats; pass one of:` | Pick from the table it prints, and pass the `@username` or the numeric id. Exit 2 |
+| `nothing to download in @demo: message 2 is a photo, and --kind asked for video` | Drop the filter or drop `--message`. Exit 2 |
+| `Telegram refused the run: Telegram asked to wait 120s before reading the history` | Run the same command after the wait. Telegram rate-limits large walks, and the ledger keeps what already landed. Exit 1 |
+
+## Development
+
+The test suite runs offline against an in-memory source, so it needs no account and no network.
+
+```
+.venv/bin/python -m pytest -q
+```
+
+`tests/fakes.py` implements the `TelegramSource` protocol. The Telethon adapter in `tgmedia/telegram.py` is the only module that talks to the network, so a change to filters, naming, the ledger, or the CLI can be proven without a login.
 
 ## Not included
 
